@@ -1384,27 +1384,6 @@ if not app.debug or os.environ.get('WERKZEUG_RUN_MAIN') == 'true':
         logging.info("Scheduler dimulai. Jobs: %s", scheduler.get_jobs())
     except Exception as e:
         logging.error(f"Gagal start scheduler: {e}")
-
-# ==================== DECORATORS ====================
-
-def login_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'user' not in session: 
-            return redirect(url_for('login', next=request.url))
-        return f(*args, **kwargs)
-    return decorated_function
-
-def admin_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if 'admin_user' not in session:
-            logging.warning(f"Admin access denied for route: {request.endpoint}")
-            return redirect(url_for('admin_login'))
-        return f(*args, **kwargs)
-    return decorated_function
-
-# ==================== SOCKETIO EVENTS ====================
         
 @socketio.on('connect')
 def handle_connect():
@@ -1436,7 +1415,12 @@ def handle_connect():
             socketio.emit('trial_status_update', {'is_trial': False, 'message': ''})
         # ---------------------------------------------
 
-# ==================== CUSTOMER ROUTES ====================
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if 'user' not in session: return redirect(url_for('login', next=request.url))
+        return f(*args, **kwargs)
+    return decorated_function
 
 @app.route('/login', methods=['GET','POST'])
 def login():
@@ -1479,9 +1463,7 @@ def register():
     return render_template('customer_register.html')
 
 @app.route('/logout')
-def logout(): 
-    session.pop('user',None); 
-    return redirect(url_for('login'))
+def logout(): session.pop('user',None); return redirect(url_for('login'))
 
 @app.route('/')
 @login_required
@@ -1491,243 +1473,6 @@ def index():
     except Exception as e:
         logging.error(f"Error rendering index.html: {e}", exc_info=True)
         return "Internal Server Error: Gagal memuat halaman utama.", 500
-
-# ==================== ADMIN ROUTES ====================
-
-@app.route('/admin/login', methods=['GET', 'POST'])
-def admin_login():
-    try:
-        if request.method == 'POST':
-            username = request.form.get('username')
-            password = request.form.get('password')
-            
-            # Default admin credentials
-            if username == 'admin' and password == 'streamhib2025':
-                session['admin_user'] = username
-                session.permanent = True
-                logging.info(f"Admin login successful for user: {username}")
-                return redirect(url_for('admin_index'))
-            else:
-                logging.warning(f"Failed admin login attempt for user: {username}")
-                return "Invalid admin credentials", 401
-        
-        return render_template('admin_login.html')
-    except Exception as e:
-        logging.error(f"Error in admin_login: {e}", exc_info=True)
-        return "Internal Server Error", 500
-
-@app.route('/admin/logout')
-def admin_logout():
-    try:
-        admin_user = session.get('admin_user')
-        session.pop('admin_user', None)
-        logging.info(f"Admin logout for user: {admin_user}")
-        return redirect(url_for('admin_login'))
-    except Exception as e:
-        logging.error(f"Error in admin_logout: {e}", exc_info=True)
-        return redirect(url_for('admin_login'))
-
-@app.route('/admin')
-@admin_required
-def admin_index():
-    try:
-        # Get statistics
-        users = read_users()
-        s_data = read_sessions()
-        videos = get_videos_list_data()
-        domain_config = read_domain_config()
-        
-        stats = {
-            'total_users': len(users),
-            'active_sessions': len(s_data.get('active_sessions', [])),
-            'inactive_sessions': len(s_data.get('inactive_sessions', [])),
-            'scheduled_sessions': len(s_data.get('scheduled_sessions', [])),
-            'total_videos': len(videos)
-        }
-        
-        logging.info(f"Admin index accessed. Stats: {stats}")
-        
-        return render_template('admin_index.html', 
-                             stats=stats, 
-                             sessions=s_data,
-                             domain_config=domain_config)
-    except Exception as e:
-        logging.error(f"Error rendering admin index: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
-
-@app.route('/admin/users')
-@admin_required
-def admin_users():
-    try:
-        users = read_users()
-        logging.info(f"Admin users page accessed. Total users: {len(users)}")
-        return render_template('admin_users.html', users=users)
-    except Exception as e:
-        logging.error(f"Error rendering admin users: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
-
-@app.route('/admin/domain')
-@admin_required
-def admin_domain():
-    try:
-        domain_config = read_domain_config()
-        logging.info(f"Admin domain page accessed. Domain config: {domain_config}")
-        return render_template('admin_domain.html', domain_config=domain_config)
-    except Exception as e:
-        logging.error(f"Error rendering admin domain: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
-
-@app.route('/admin/recovery')
-@admin_required
-def admin_recovery():
-    try:
-        logging.info("Admin recovery page accessed")
-        return render_template('admin_recovery.html')
-    except Exception as e:
-        logging.error(f"Error rendering admin recovery: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
-
-# ==================== CUSTOMER API ====================
-
-@app.route('/api/customer/login', methods=['POST'])
-def customer_login_api():
-    try:
-        data = request.json
-        username = data.get('username')
-        password = data.get('password')
-        
-        users = read_users()
-        if username in users and users[username] == password:
-            session['user'] = username
-            session.permanent = True
-            return jsonify({'success': True, 'message': 'Login successful'})
-        else:
-            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
-            
-    except Exception as e:
-        logging.error(f"Customer login error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Server error'}), 500
-
-@app.route('/api/customer/register', methods=['POST'])
-def customer_register_api():
-    try:
-        data = request.json
-        username = data.get('username')
-        password = data.get('password')
-        
-        if not username or not password:
-            return jsonify({'success': False, 'message': 'Username and password required'}), 400
-        
-        users = read_users()
-        
-        # Check trial mode and user limit
-        if not TRIAL_MODE_ENABLED and len(users) >= 1:
-            return jsonify({'success': False, 'message': 'Registration closed (user limit reached)'}), 403
-        
-        if username in users:
-            return jsonify({'success': False, 'message': 'Username already exists'}), 400
-        
-        users[username] = password
-        write_users(users)
-        
-        session['user'] = username
-        session.permanent = True
-        
-        return jsonify({'success': True, 'message': 'Registration successful'})
-        
-    except Exception as e:
-        logging.error(f"Customer register error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Server error'}), 500
-
-# ==================== ADMIN API ====================
-
-@app.route('/api/admin/login', methods=['POST'])
-def admin_login_api():
-    try:
-        data = request.json
-        username = data.get('username')
-        password = data.get('password')
-        
-        if username == 'admin' and password == 'streamhib2025':
-            session['admin_user'] = username
-            session.permanent = True
-            logging.info(f"Admin API login successful for user: {username}")
-            return jsonify({'success': True, 'message': 'Login successful'})
-        else:
-            logging.warning(f"Failed admin API login attempt for user: {username}")
-            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
-            
-    except Exception as e:
-        logging.error(f"Admin login API error: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Server error'}), 500
-
-@app.route('/api/admin/users/<username>', methods=['DELETE'])
-@admin_required
-def delete_user_api(username):
-    try:
-        users = read_users()
-        
-        if username not in users:
-            return jsonify({'success': False, 'message': 'User not found'}), 404
-        
-        del users[username]
-        write_users(users)
-        
-        logging.info(f"User {username} deleted by admin")
-        return jsonify({'success': True, 'message': f'User {username} deleted successfully'})
-        
-    except Exception as e:
-        logging.error(f"Error deleting user {username}: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Server error'}), 500
-
-@app.route('/api/sessions/stop/<session_id>', methods=['POST'])
-@admin_required
-def stop_session_admin_api(session_id):
-    try:
-        # Reuse existing stop streaming logic
-        s_data = read_sessions()
-        active_session_data = next((s for s in s_data.get('active_sessions',[]) if s['id']==session_id),None)
-        
-        if not active_session_data:
-            return jsonify({'success': False, 'message': 'Session not found'}), 404
-        
-        sanitized_service_id_for_stop = active_session_data.get('sanitized_service_id')
-        if not sanitized_service_id_for_stop:
-            sanitized_service_id_for_stop = sanitize_for_service_name(session_id)
-        
-        service_name_systemd = f"stream-{sanitized_service_id_for_stop}.service"
-        
-        try:
-            subprocess.run(["systemctl","stop",service_name_systemd],check=False, timeout=15)
-            service_path = os.path.join(SERVICE_DIR,service_name_systemd)
-            if os.path.exists(service_path): 
-                os.remove(service_path)
-                subprocess.run(["systemctl","daemon-reload"],check=True,timeout=10)
-        except Exception as e_service_stop:
-             logging.warning(f"Warning stopping service {service_name_systemd}: {e_service_stop}")
-            
-        stop_time_iso = datetime.now(jakarta_tz).isoformat()
-        active_session_data['status']='inactive'
-        active_session_data['stop_time']=stop_time_iso
-        
-        s_data['inactive_sessions'] = add_or_update_session_in_list(
-            s_data.get('inactive_sessions', []), active_session_data
-        )
-        s_data['active_sessions']=[s for s in s_data['active_sessions'] if s['id']!=session_id]
-        write_sessions(s_data)
-        
-        with socketio_lock:
-            socketio.emit('sessions_update',get_active_sessions_data())
-            socketio.emit('inactive_sessions_update',{"inactive_sessions":get_inactive_sessions_data()})
-        
-        logging.info(f"Session {session_id} stopped by admin")
-        return jsonify({'success': True, 'message': f'Session {session_id} stopped successfully'})
-        
-    except Exception as e:
-        logging.error(f"Error stopping session {session_id}: {e}", exc_info=True)
-        return jsonify({'success': False, 'message': 'Server error'}), 500
-
-# ==================== VIDEO API ====================
 
 def extract_drive_id(val):
     if not val: return None
@@ -1809,64 +1554,6 @@ def delete_all_videos_api():
 @login_required
 def serve_video(filename):
     return send_from_directory(VIDEO_DIR, filename)
-
-@app.route('/api/videos', methods=['GET'])
-@login_required
-def list_videos_api():
-    try: return jsonify(get_videos_list_data())
-    except Exception as e: 
-        logging.error(f"Error API /api/videos: {str(e)}",exc_info=True)
-        return jsonify({'status':'error','message':'Gagal ambil daftar video.'}),500
-
-@app.route('/api/videos/rename', methods=['POST'])
-@login_required
-def rename_video_api(): 
-    try:
-        data = request.get_json(); old,new_base = data.get('old_name'),data.get('new_name')
-        if not all([old,new_base]): return jsonify({'status':'error','message':'Nama lama & baru diperlukan'}),400
-        # Validasi nama baru bisa lebih permisif jika diinginkan, tapi hati-hati dengan karakter khusus untuk nama file.
-        # Untuk saat ini, kita biarkan validasi yang sudah ada.
-        if not re.match(r'^[\w\-. ]+$',new_base): return jsonify({'status':'error','message':'Nama baru tidak valid (hanya huruf, angka, spasi, titik, strip, underscore).'}),400
-        old_p = os.path.join(VIDEO_DIR,old)
-        if not os.path.isfile(old_p): return jsonify({'status':'error','message':f'File "{old}" tidak ada'}),404
-        new_p = os.path.join(VIDEO_DIR,new_base.strip()+os.path.splitext(old)[1])
-        if old_p==new_p: return jsonify({'status':'success','message':'Nama video tidak berubah.'})
-        if os.path.isfile(new_p): return jsonify({'status':'error','message':f'Nama "{os.path.basename(new_p)}" sudah ada.'}),400
-        os.rename(old_p,new_p)
-        with socketio_lock: socketio.emit('videos_update',get_videos_list_data())
-        return jsonify({'status':'success','message':f'Video diubah ke "{os.path.basename(new_p)}"'})
-    except Exception as e: 
-        logging.exception("Error rename video")
-        return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
-
-@app.route('/api/videos/delete', methods=['POST'])
-@login_required
-def delete_video_api(): 
-    try:
-        fname = request.json.get('file_name')
-        if not fname: return jsonify({'status':'error','message':'Nama file diperlukan'}),400
-        fpath = os.path.join(VIDEO_DIR,fname)
-        if not os.path.isfile(fpath): return jsonify({'status':'error','message':f'File "{fname}" tidak ada'}),404
-        os.remove(fpath)
-        with socketio_lock: socketio.emit('videos_update',get_videos_list_data())
-        return jsonify({'status':'success','message':f'Video "{fname}" dihapus'})
-    except Exception as e: 
-        logging.exception(f"Error delete video {request.json.get('file_name','N/A')}")
-        return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
-        
-@app.route('/api/disk-usage', methods=['GET'])
-@login_required
-def disk_usage_api(): 
-    try:
-        t,u,f = shutil.disk_usage(VIDEO_DIR); tg,ug,fg=t/(2**30),u/(2**30),f/(2**30)
-        pu = (u/t)*100 if t>0 else 0
-        stat = 'full' if pu>95 else 'almost_full' if pu>80 else 'normal'
-        return jsonify({'status':stat,'total':round(tg,2),'used':round(ug,2),'free':round(fg,2),'percent_used':round(pu,2)})
-    except Exception as e: 
-        logging.error(f"Error disk usage: {str(e)}",exc_info=True)
-        return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
-
-# ==================== STREAMING API ====================
 
 @app.route('/api/start', methods=['POST'])
 @login_required
@@ -1990,6 +1677,62 @@ def stop_streaming_api():
         logging.exception(f"Error stop sesi '{session_id_err}'")
         return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
 
+@app.route('/api/videos', methods=['GET'])
+@login_required
+def list_videos_api():
+    try: return jsonify(get_videos_list_data())
+    except Exception as e: 
+        logging.error(f"Error API /api/videos: {str(e)}",exc_info=True)
+        return jsonify({'status':'error','message':'Gagal ambil daftar video.'}),500
+
+@app.route('/api/videos/rename', methods=['POST'])
+@login_required
+def rename_video_api(): 
+    try:
+        data = request.get_json(); old,new_base = data.get('old_name'),data.get('new_name')
+        if not all([old,new_base]): return jsonify({'status':'error','message':'Nama lama & baru diperlukan'}),400
+        # Validasi nama baru bisa lebih permisif jika diinginkan, tapi hati-hati dengan karakter khusus untuk nama file.
+        # Untuk saat ini, kita biarkan validasi yang sudah ada.
+        if not re.match(r'^[\w\-. ]+$',new_base): return jsonify({'status':'error','message':'Nama baru tidak valid (hanya huruf, angka, spasi, titik, strip, underscore).'}),400
+        old_p = os.path.join(VIDEO_DIR,old)
+        if not os.path.isfile(old_p): return jsonify({'status':'error','message':f'File "{old}" tidak ada'}),404
+        new_p = os.path.join(VIDEO_DIR,new_base.strip()+os.path.splitext(old)[1])
+        if old_p==new_p: return jsonify({'status':'success','message':'Nama video tidak berubah.'})
+        if os.path.isfile(new_p): return jsonify({'status':'error','message':f'Nama "{os.path.basename(new_p)}" sudah ada.'}),400
+        os.rename(old_p,new_p)
+        with socketio_lock: socketio.emit('videos_update',get_videos_list_data())
+        return jsonify({'status':'success','message':f'Video diubah ke "{os.path.basename(new_p)}"'})
+    except Exception as e: 
+        logging.exception("Error rename video")
+        return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
+
+@app.route('/api/videos/delete', methods=['POST'])
+@login_required
+def delete_video_api(): 
+    try:
+        fname = request.json.get('file_name')
+        if not fname: return jsonify({'status':'error','message':'Nama file diperlukan'}),400
+        fpath = os.path.join(VIDEO_DIR,fname)
+        if not os.path.isfile(fpath): return jsonify({'status':'error','message':f'File "{fname}" tidak ada'}),404
+        os.remove(fpath)
+        with socketio_lock: socketio.emit('videos_update',get_videos_list_data())
+        return jsonify({'status':'success','message':f'Video "{fname}" dihapus'})
+    except Exception as e: 
+        logging.exception(f"Error delete video {request.json.get('file_name','N/A')}")
+        return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
+        
+@app.route('/api/disk-usage', methods=['GET'])
+@login_required
+def disk_usage_api(): 
+    try:
+        t,u,f = shutil.disk_usage(VIDEO_DIR); tg,ug,fg=t/(2**30),u/(2**30),f/(2**30)
+        pu = (u/t)*100 if t>0 else 0
+        stat = 'full' if pu>95 else 'almost_full' if pu>80 else 'normal'
+        return jsonify({'status':stat,'total':round(tg,2),'used':round(ug,2),'free':round(fg,2),'percent_used':round(pu,2)})
+    except Exception as e: 
+        logging.error(f"Error disk usage: {str(e)}",exc_info=True)
+        return jsonify({'status':'error','message':f'Kesalahan Server: {str(e)}'}),500
+
 @app.route('/api/sessions', methods=['GET'])
 @login_required
 def list_sessions_api():
@@ -1997,8 +1740,6 @@ def list_sessions_api():
     except Exception as e: 
         logging.error(f"Error API /api/sessions: {str(e)}",exc_info=True)
         return jsonify({'status':'error','message':'Gagal ambil sesi aktif.'}),500
-
-# ==================== SCHEDULE API ====================
 
 @app.route('/api/schedule', methods=['POST'])
 @login_required
@@ -2160,6 +1901,7 @@ def schedule_streaming_api():
         logging.exception(f"Error server saat menjadwalkan sesi '{session_name_err_sched}'")
         return jsonify({'status': 'error', 'message': f'Kesalahan Server Internal: {str(e)}'}), 500
 
+
 @app.route('/api/schedule-list', methods=['GET'])
 @login_required
 def get_schedules_api():
@@ -2167,6 +1909,7 @@ def get_schedules_api():
     except Exception as e: 
         logging.error(f"Error API /api/schedule-list: {str(e)}",exc_info=True)
         return jsonify({'status':'error','message':'Gagal ambil daftar jadwal.'}),500
+
 
 @app.route('/api/cancel-schedule', methods=['POST'])
 @login_required
@@ -2236,7 +1979,6 @@ def cancel_schedule_api():
         logging.exception(f"Error saat membatalkan jadwal, ID definisi dari request: {def_id_err}")
         return jsonify({'status': 'error', 'message': f'Kesalahan Server Internal: {str(e)}'}), 500
 
-# ==================== SESSION MANAGEMENT API ====================
 
 @app.route('/api/inactive-sessions', methods=['GET'])
 @login_required
@@ -2361,6 +2103,8 @@ def edit_inactive_session_api():
         session_id_err_edit_sess = req_data_edit_sess.get('session_name_original', req_data_edit_sess.get('id', 'N/A'))
         logging.exception(f"Error edit sesi tidak aktif '{session_id_err_edit_sess}'")
         return jsonify({'status':'error','message':f'Kesalahan Server Internal: {str(e)}'}),500
+        
+# Tambahkan ini di dalam app.py, di bagian API endpoint Anda
 
 @app.route('/api/inactive-sessions/delete-all', methods=['POST'])
 @login_required
@@ -2387,7 +2131,7 @@ def delete_all_inactive_sessions_api():
         logging.exception("Error di API delete_all_inactive_sessions")
         return jsonify({'status': 'error', 'message': f'Kesalahan Server: {str(e)}'}), 500
 
-# ==================== RECOVERY API ====================
+# ==================== API RECOVERY MANUAL ====================
 
 @app.route('/api/recovery/manual', methods=['POST'])
 @login_required
@@ -2464,7 +2208,9 @@ def recovery_status_api():
             'message': f'Gagal mendapatkan status recovery: {str(e)}'
         }), 500
 
-# ==================== DOMAIN API ====================
+# ==================== AKHIR API RECOVERY ====================
+
+# ==================== API DOMAIN MANAGEMENT ====================
 
 @app.route('/api/domain/config', methods=['GET'])
 @login_required
@@ -2684,12 +2430,286 @@ def setup_ssl_api():
             'message': f'Gagal setup SSL: {str(e)}'
         }), 500
 
-# ==================== UTILITY API ====================
+# ==================== AKHIR API DOMAIN ====================
+
+# ==================== ADMIN PANEL ROUTES ====================
+
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        logging.debug(f"ADMIN CHECK: Checking admin access for route {request.endpoint}")
+        if 'admin_user' not in session:
+            logging.warning(f"ADMIN ACCESS DENIED: No admin session found for route {request.endpoint}")
+            return redirect(url_for('admin_login'))
+        logging.debug(f"ADMIN ACCESS GRANTED: User {session.get('admin_user')} accessing {request.endpoint}")
+        return f(*args, **kwargs)
+    return decorated_function
+
+@app.route('/admin/login', methods=['GET', 'POST'])
+def admin_login():
+    try:
+        if request.method == 'POST':
+            username = request.form.get('username')
+            password = request.form.get('password')
+            
+            logging.info(f"ADMIN LOGIN ATTEMPT: Username: {username}")
+            
+            # Default admin credentials
+            if username == 'admin' and password == 'streamhib2025':
+                session['admin_user'] = username
+                session.permanent = True
+                logging.info(f"ADMIN LOGIN SUCCESS: User {username} logged in successfully")
+                return redirect(url_for('admin_index'))
+            else:
+                logging.warning(f"ADMIN LOGIN FAILED: Invalid credentials for username: {username}")
+                return "Invalid admin credentials", 401
+        
+        return render_template('admin_login.html')
+    except Exception as e:
+        logging.error(f"ADMIN LOGIN ERROR: {e}", exc_info=True)
+        return "Internal Server Error", 500
+
+@app.route('/admin/logout')
+def admin_logout():
+    try:
+        admin_user = session.get('admin_user', 'unknown')
+        session.pop('admin_user', None)
+        logging.info(f"ADMIN LOGOUT: User {admin_user} logged out")
+        return redirect(url_for('admin_login'))
+    except Exception as e:
+        logging.error(f"ADMIN LOGOUT ERROR: {e}", exc_info=True)
+        return redirect(url_for('admin_login'))
+
+@app.route('/admin')
+@admin_required
+def admin_index():
+    try:
+        logging.info(f"ADMIN INDEX: Loading admin dashboard for user {session.get('admin_user')}")
+        
+        # Get statistics with safe error handling
+        users = read_users()
+        s_data = read_sessions()
+        videos = get_videos_list_data()
+        domain_config = read_domain_config()
+        
+        # Ensure all data is properly formatted
+        active_sessions = s_data.get('active_sessions', [])
+        inactive_sessions = s_data.get('inactive_sessions', [])
+        scheduled_sessions = s_data.get('scheduled_sessions', [])
+        
+        # Convert to dict if it's a list (fix for the template error)
+        if isinstance(active_sessions, list):
+            active_sessions_dict = {f"session_{i}": session for i, session in enumerate(active_sessions)}
+        else:
+            active_sessions_dict = active_sessions
+        
+        stats = {
+            'total_users': len(users) if users else 0,
+            'active_sessions': len(active_sessions) if active_sessions else 0,
+            'inactive_sessions': len(inactive_sessions) if inactive_sessions else 0,
+            'scheduled_sessions': len(scheduled_sessions) if scheduled_sessions else 0,
+            'total_videos': len(videos) if videos else 0
+        }
+        
+        # Prepare sessions data for template
+        sessions_data = {
+            'active_sessions': active_sessions_dict,
+            'inactive_sessions': inactive_sessions,
+            'scheduled_sessions': scheduled_sessions
+        }
+        
+        logging.info(f"ADMIN INDEX: Stats loaded - {stats}")
+        
+        return render_template('admin_index.html', 
+                             stats=stats, 
+                             sessions=sessions_data,
+                             domain_config=domain_config)
+    except Exception as e:
+        logging.error(f"ADMIN INDEX ERROR: {e}", exc_info=True)
+        return f"Internal Server Error: {str(e)}", 500
+
+@app.route('/admin/users')
+@admin_required
+def admin_users():
+    try:
+        logging.info(f"ADMIN USERS: Loading users page for admin {session.get('admin_user')}")
+        users = read_users()
+        return render_template('admin_users.html', users=users)
+    except Exception as e:
+        logging.error(f"ADMIN USERS ERROR: {e}", exc_info=True)
+        return f"Internal Server Error: {str(e)}", 500
+
+@app.route('/admin/domain')
+@admin_required
+def admin_domain():
+    try:
+        logging.info(f"ADMIN DOMAIN: Loading domain page for admin {session.get('admin_user')}")
+        domain_config = read_domain_config()
+        return render_template('admin_domain.html', domain_config=domain_config)
+    except Exception as e:
+        logging.error(f"ADMIN DOMAIN ERROR: {e}", exc_info=True)
+        return f"Internal Server Error: {str(e)}", 500
+
+@app.route('/admin/recovery')
+@admin_required
+def admin_recovery():
+    try:
+        logging.info(f"ADMIN RECOVERY: Loading recovery page for admin {session.get('admin_user')}")
+        return render_template('admin_recovery.html')
+    except Exception as e:
+        logging.error(f"ADMIN RECOVERY ERROR: {e}", exc_info=True)
+        return f"Internal Server Error: {str(e)}", 500
+
+# ==================== ADMIN API ROUTES ====================
+
+@app.route('/api/admin/login', methods=['POST'])
+def admin_login_api():
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+        
+        logging.info(f"ADMIN API LOGIN: Attempt for username {username}")
+        
+        if username == 'admin' and password == 'streamhib2025':
+            session['admin_user'] = username
+            session.permanent = True
+            logging.info(f"ADMIN API LOGIN SUCCESS: User {username}")
+            return jsonify({'success': True, 'message': 'Login successful'})
+        else:
+            logging.warning(f"ADMIN API LOGIN FAILED: Invalid credentials for {username}")
+            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+            
+    except Exception as e:
+        logging.error(f"ADMIN API LOGIN ERROR: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Server error'}), 500
+
+@app.route('/api/admin/users/<username>', methods=['DELETE'])
+@admin_required
+def delete_user_api(username):
+    try:
+        logging.info(f"ADMIN DELETE USER: Deleting user {username} by admin {session.get('admin_user')}")
+        
+        users = read_users()
+        
+        if username not in users:
+            return jsonify({'success': False, 'message': 'User not found'}), 404
+        
+        del users[username]
+        write_users(users)
+        
+        logging.info(f"ADMIN DELETE USER SUCCESS: User {username} deleted")
+        return jsonify({'success': True, 'message': f'User {username} deleted successfully'})
+        
+    except Exception as e:
+        logging.error(f"ADMIN DELETE USER ERROR: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Server error'}), 500
+
+@app.route('/api/sessions/stop/<session_id>', methods=['POST'])
+@admin_required
+def stop_session_admin_api(session_id):
+    try:
+        logging.info(f"ADMIN STOP SESSION: Stopping session {session_id} by admin {session.get('admin_user')}")
+        
+        # Reuse existing stop streaming logic
+        s_data = read_sessions()
+        active_session_data = next((s for s in s_data.get('active_sessions',[]) if s['id']==session_id),None)
+        
+        if not active_session_data:
+            return jsonify({'success': False, 'message': 'Session not found'}), 404
+        
+        sanitized_service_id_for_stop = active_session_data.get('sanitized_service_id')
+        if not sanitized_service_id_for_stop:
+            sanitized_service_id_for_stop = sanitize_for_service_name(session_id)
+        
+        service_name_systemd = f"stream-{sanitized_service_id_for_stop}.service"
+        
+        try:
+            subprocess.run(["systemctl","stop",service_name_systemd],check=False, timeout=15)
+            service_path = os.path.join(SERVICE_DIR,service_name_systemd)
+            if os.path.exists(service_path): 
+                os.remove(service_path)
+                subprocess.run(["systemctl","daemon-reload"],check=True,timeout=10)
+        except Exception as e_service_stop:
+             logging.warning(f"Warning stopping service {service_name_systemd}: {e_service_stop}")
+            
+        stop_time_iso = datetime.now(jakarta_tz).isoformat()
+        active_session_data['status']='inactive'
+        active_session_data['stop_time']=stop_time_iso
+        
+        s_data['inactive_sessions'] = add_or_update_session_in_list(
+            s_data.get('inactive_sessions', []), active_session_data
+        )
+        s_data['active_sessions']=[s for s in s_data['active_sessions'] if s['id']!=session_id]
+        write_sessions(s_data)
+        
+        with socketio_lock:
+            socketio.emit('sessions_update',get_active_sessions_data())
+            socketio.emit('inactive_sessions_update',{"inactive_sessions":get_inactive_sessions_data()})
+        
+        logging.info(f"ADMIN STOP SESSION SUCCESS: Session {session_id} stopped")
+        return jsonify({'success': True, 'message': f'Session {session_id} stopped successfully'})
+        
+    except Exception as e:
+        logging.error(f"ADMIN STOP SESSION ERROR: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Server error'}), 500
+
+# ==================== AKHIR ADMIN PANEL ====================
         
 @app.route('/api/check-session', methods=['GET'])
 @login_required
 def check_session_api(): 
     return jsonify({'logged_in':True,'user':session.get('user')})
+
+@app.route('/api/customer/login', methods=['POST'])
+def customer_login_api():
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+        
+        users = read_users()
+        if username in users and users[username] == password:
+            session['user'] = username
+            session.permanent = True
+            return jsonify({'success': True, 'message': 'Login successful'})
+        else:
+            return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
+            
+    except Exception as e:
+        logging.error(f"Customer login error: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Server error'}), 500
+
+@app.route('/api/customer/register', methods=['POST'])
+def customer_register_api():
+    try:
+        data = request.json
+        username = data.get('username')
+        password = data.get('password')
+        
+        if not username or not password:
+            return jsonify({'success': False, 'message': 'Username and password required'}), 400
+        
+        users = read_users()
+        
+        # Check trial mode and user limit
+        if not TRIAL_MODE_ENABLED and len(users) >= 1:
+            return jsonify({'success': False, 'message': 'Registration closed (user limit reached)'}), 403
+        
+        if username in users:
+            return jsonify({'success': False, 'message': 'Username already exists'}), 400
+        
+        users[username] = password
+        write_users(users)
+        
+        session['user'] = username
+        session.permanent = True
+        
+        return jsonify({'success': True, 'message': 'Registration successful'})
+        
+    except Exception as e:
+        logging.error(f"Customer register error: {e}", exc_info=True)
+        return jsonify({'success': False, 'message': 'Server error'}), 500
 
 if __name__ == '__main__':
     socketio.run(app, host='0.0.0.0', port=5000, debug=True, use_reloader=True)
