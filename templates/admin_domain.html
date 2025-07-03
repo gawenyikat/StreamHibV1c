@@ -32,7 +32,13 @@
             
             {% if domain_config.domain_name %}
                 <div class="bg-green-50 border border-green-200 rounded-lg p-4 mb-4">
-                    <h3 class="font-semibold text-green-800 mb-2">Active Domain</h3>
+                    <div class="flex items-center justify-between mb-4">
+                        <h3 class="font-semibold text-green-800">Active Domain</h3>
+                        <button onclick="removeDomain()" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fas fa-trash mr-2"></i>Remove Domain
+                        </button>
+                    </div>
+                    
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
                             <p class="text-sm text-gray-600">Domain Name</p>
@@ -42,9 +48,9 @@
                             <p class="text-sm text-gray-600">SSL Status</p>
                             <p class="font-semibold">
                                 {% if domain_config.ssl_enabled %}
-                                    <span class="text-green-600"><i class="fas fa-lock mr-1"></i>Enabled</span>
+                                    <span class="text-green-600"><i class="fas fa-lock mr-1"></i>Enabled (Cloudflare)</span>
                                 {% else %}
-                                    <span class="text-red-600"><i class="fas fa-unlock mr-1"></i>Disabled</span>
+                                    <span class="text-orange-600"><i class="fas fa-unlock mr-1"></i>HTTP Only</span>
                                 {% endif %}
                             </p>
                         </div>
@@ -62,11 +68,11 @@
                         <h4 class="font-semibold text-blue-800 mb-2">Access URLs:</h4>
                         <div class="space-y-1">
                             {% if domain_config.ssl_enabled %}
-                                <p class="text-blue-700">Customer Panel: <a href="https://{{ domain_config.domain_name }}" target="_blank" class="underline">https://{{ domain_config.domain_name }}</a></p>
-                                <p class="text-blue-700">Admin Panel: <a href="https://{{ domain_config.domain_name }}/admin" target="_blank" class="underline">https://{{ domain_config.domain_name }}/admin</a></p>
+                                <p class="text-blue-700">Customer Panel: <a href="https://{{ domain_config.domain_name }}" target="_blank" class="underline font-semibold">https://{{ domain_config.domain_name }}</a></p>
+                                <p class="text-blue-700">Admin Panel: <a href="https://{{ domain_config.domain_name }}/admin" target="_blank" class="underline font-semibold">https://{{ domain_config.domain_name }}/admin</a></p>
                             {% else %}
-                                <p class="text-blue-700">Customer Panel: <a href="http://{{ domain_config.domain_name }}" target="_blank" class="underline">http://{{ domain_config.domain_name }}</a></p>
-                                <p class="text-blue-700">Admin Panel: <a href="http://{{ domain_config.domain_name }}/admin" target="_blank" class="underline">http://{{ domain_config.domain_name }}/admin</a></p>
+                                <p class="text-blue-700">Customer Panel: <a href="http://{{ domain_config.domain_name }}" target="_blank" class="underline font-semibold">http://{{ domain_config.domain_name }}</a></p>
+                                <p class="text-blue-700">Admin Panel: <a href="http://{{ domain_config.domain_name }}/admin" target="_blank" class="underline font-semibold">http://{{ domain_config.domain_name }}/admin</a></p>
                             {% endif %}
                         </div>
                     </div>
@@ -88,7 +94,7 @@
             <form id="domainForm" class="space-y-6">
                 <div>
                     <label class="block text-sm font-medium text-gray-700 mb-2">Domain Name</label>
-                    <input type="text" id="domainName" placeholder="streaming.yourdomain.com" required
+                    <input type="text" id="domainName" placeholder="jembot.streamhib.com" required
                            class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                     <p class="text-sm text-gray-500 mt-1">Enter your domain name (without http/https)</p>
                 </div>
@@ -100,9 +106,20 @@
                     <p class="text-sm text-gray-500 mt-1">Port for the application (default: 5000)</p>
                 </div>
                 
-                <div class="flex items-center">
-                    <input type="checkbox" id="sslEnabled" class="mr-3">
-                    <label for="sslEnabled" class="text-sm font-medium text-gray-700">Enable SSL (Let's Encrypt)</label>
+                <div class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                    <div class="flex items-center mb-3">
+                        <input type="checkbox" id="sslEnabled" class="mr-3">
+                        <label for="sslEnabled" class="text-sm font-medium text-gray-700">Enable SSL Support (Cloudflare Compatible)</label>
+                    </div>
+                    <div class="text-sm text-blue-600">
+                        <p class="mb-2"><strong>Recommended for Cloudflare users:</strong></p>
+                        <ul class="list-disc list-inside space-y-1">
+                            <li>Check this if your domain uses Cloudflare</li>
+                            <li>Set Cloudflare SSL to "Flexible" or "Full"</li>
+                            <li>Nginx will be configured for Cloudflare SSL</li>
+                            <li>Your site will be accessible via HTTPS</li>
+                        </ul>
+                    </div>
                 </div>
                 
                 <button type="submit" class="bg-blue-500 hover:bg-blue-600 text-white px-6 py-3 rounded-lg transition-colors">
@@ -125,13 +142,21 @@
                 </div>
                 
                 <div class="border-l-4 border-green-500 pl-4">
-                    <h3 class="font-semibold text-gray-800">Step 2: Domain Setup</h3>
-                    <p class="text-gray-600">Use the form above to configure your domain in StreamHib V2.</p>
+                    <h3 class="font-semibold text-gray-800">Step 2: Cloudflare Setup (Recommended)</h3>
+                    <div class="text-gray-600">
+                        <p class="mb-2">If using Cloudflare:</p>
+                        <ul class="list-disc list-inside space-y-1">
+                            <li>Add your domain to Cloudflare</li>
+                            <li>Set SSL/TLS mode to "Flexible" or "Full"</li>
+                            <li>Enable "Always Use HTTPS" (optional)</li>
+                            <li>Check "Enable SSL Support" in the form above</li>
+                        </ul>
+                    </div>
                 </div>
                 
                 <div class="border-l-4 border-purple-500 pl-4">
-                    <h3 class="font-semibold text-gray-800">Step 3: SSL (Optional)</h3>
-                    <p class="text-gray-600">Enable SSL for secure HTTPS access. Let's Encrypt certificate will be automatically configured.</p>
+                    <h3 class="font-semibold text-gray-800">Step 3: Domain Setup</h3>
+                    <p class="text-gray-600">Use the form above to configure your domain in StreamHib V2.</p>
                 </div>
                 
                 <div class="border-l-4 border-yellow-500 pl-4">
@@ -139,8 +164,9 @@
                     <ul class="text-gray-600 list-disc list-inside">
                         <li>Professional access: https://yourdomain.com instead of http://IP:5000</li>
                         <li>Easy migration: Change DNS instead of updating customer URLs</li>
-                        <li>SSL security for customer data protection</li>
+                        <li>SSL security via Cloudflare (free)</li>
                         <li>Better branding and customer trust</li>
+                        <li>Automatic nginx configuration</li>
                     </ul>
                 </div>
             </div>
@@ -183,38 +209,71 @@
                 
                 if (result.success) {
                     // Show success message
-                    const successDiv = document.createElement('div');
-                    successDiv.className = 'fixed top-4 right-4 bg-green-500 text-white p-4 rounded-lg shadow-lg z-50';
-                    successDiv.innerHTML = `
-                        <div class="flex items-center">
-                            <i class="fas fa-check-circle mr-2"></i>
-                            <span>${result.message}</span>
-                        </div>
-                    `;
-                    document.body.appendChild(successDiv);
-                    
-                    // Remove success message after 5 seconds
-                    setTimeout(() => {
-                        successDiv.remove();
-                    }, 5000);
+                    showNotification('success', result.message);
                     
                     // Reload page after 2 seconds
                     setTimeout(() => {
                         location.reload();
                     }, 2000);
                 } else {
-                    alert('Setup failed: ' + result.message);
+                    showNotification('error', 'Setup failed: ' + result.message);
                 }
             } catch (error) {
                 console.error('Domain setup error:', error);
-                alert('Error setting up domain: ' + error.message);
+                showNotification('error', 'Error setting up domain: ' + error.message);
             } finally {
                 // Restore button state
                 submitBtn.innerHTML = originalText;
                 submitBtn.disabled = false;
             }
         });
+        
+        async function removeDomain() {
+            if (!confirm('Remove domain configuration? This will disable domain access.')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch('/api/domain/remove', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    }
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    showNotification('success', result.message);
+                    setTimeout(() => {
+                        location.reload();
+                    }, 1500);
+                } else {
+                    showNotification('error', 'Error: ' + result.message);
+                }
+            } catch (error) {
+                showNotification('error', 'Error removing domain: ' + error.message);
+            }
+        }
+        
+        function showNotification(type, message) {
+            const notification = document.createElement('div');
+            notification.className = `fixed top-4 right-4 p-4 rounded-lg shadow-lg z-50 ${
+                type === 'success' ? 'bg-green-500' : 'bg-red-500'
+            } text-white`;
+            notification.innerHTML = `
+                <div class="flex items-center">
+                    <i class="fas ${type === 'success' ? 'fa-check-circle' : 'fa-exclamation-circle'} mr-2"></i>
+                    <span>${message}</span>
+                </div>
+            `;
+            document.body.appendChild(notification);
+            
+            // Remove notification after 5 seconds
+            setTimeout(() => {
+                notification.remove();
+            }, 5000);
+        }
     </script>
 </body>
 </html>
-```
