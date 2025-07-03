@@ -43,7 +43,7 @@ socketio_lock = Lock()
 app.permanent_session_lifetime = timedelta(hours=12)
 jakarta_tz = timezone('Asia/Jakarta')
 
-# ==================== SISTEM DOMAIN BARU ====================
+# ==================== SISTEM DOMAIN YANG DIPERBAIKI ====================
 
 def read_domain_config():
     """
@@ -56,14 +56,20 @@ def read_domain_config():
             "ssl_enabled": False,
             "port": 5000,
             "auto_redirect": False,
-            "configured_at": None
+            "configured_at": None,
+            "nginx_configured": False,
+            "ssl_attempted": False
         }
         write_domain_config(default_config)
         return default_config
     
     try:
         with open(DOMAIN_CONFIG_FILE, 'r') as f:
-            return json.load(f)
+            config = json.load(f)
+            # Ensure all required keys exist
+            config.setdefault('nginx_configured', False)
+            config.setdefault('ssl_attempted', False)
+            return config
     except Exception as e:
         logging.error(f"Error reading domain config: {e}")
         return {
@@ -72,7 +78,9 @@ def read_domain_config():
             "ssl_enabled": False,
             "port": 5000,
             "auto_redirect": False,
-            "configured_at": None
+            "configured_at": None,
+            "nginx_configured": False,
+            "ssl_attempted": False
         }
 
 def write_domain_config(config):
@@ -116,6 +124,33 @@ def get_current_url():
         
         port = domain_config.get('port', 5000)
         return f"http://{server_ip}:{port}"
+
+def check_dns_propagation(domain_name):
+    """
+    Cek apakah DNS domain sudah mengarah ke server ini
+    """
+    try:
+        import socket
+        
+        # Get domain IP
+        domain_ip = socket.gethostbyname(domain_name)
+        
+        # Get server IP
+        try:
+            server_ip = subprocess.check_output(["curl", "-s", "ifconfig.me"], text=True, timeout=5).strip()
+        except:
+            try:
+                server_ip = subprocess.check_output(["curl", "-s", "ipinfo.io/ip"], text=True, timeout=5).strip()
+            except:
+                return False, "Cannot determine server IP"
+        
+        if domain_ip == server_ip:
+            return True, f"DNS OK: {domain_name} → {server_ip}"
+        else:
+            return False, f"DNS mismatch: {domain_name} → {domain_ip}, server IP: {server_ip}"
+            
+    except Exception as e:
+        return False, f"DNS check failed: {str(e)}"
 
 def ensure_ssh_access():
     """
@@ -262,6 +297,14 @@ def setup_ssl_with_certbot(domain_name):
     try:
         logging.info(f"SSL SETUP: Starting SSL configuration for {domain_name}")
         
+        # Cek DNS propagation dulu
+        dns_ok, dns_message = check_dns_propagation(domain_name)
+        logging.info(f"SSL SETUP: DNS check result: {dns_message}")
+        
+        if not dns_ok:
+            logging.warning(f"SSL SETUP: DNS not properly configured: {dns_message}")
+            return False
+        
         # Install certbot dan plugin nginx
         logging.info("SSL SETUP: Installing certbot...")
         subprocess.run(["apt", "update"], check=False, capture_output=True)
@@ -272,21 +315,6 @@ def setup_ssl_with_certbot(domain_name):
         if install_result.returncode != 0:
             logging.error(f"SSL SETUP: Failed to install certbot: {install_result.stderr}")
             return False
-        
-        # Cek apakah domain sudah mengarah ke server ini
-        try:
-            import socket
-            domain_ip = socket.gethostbyname(domain_name)
-            server_ip = subprocess.check_output(["curl", "-s", "ifconfig.me"], text=True, timeout=5).strip()
-            
-            logging.info(f"SSL SETUP: Domain {domain_name} resolves to {domain_ip}, server IP is {server_ip}")
-            
-            if domain_ip != server_ip:
-                logging.warning(f"SSL SETUP: Domain {domain_name} ({domain_ip}) tidak mengarah ke server ini ({server_ip})")
-                # Tetap lanjutkan, mungkin DNS belum propagasi penuh
-        except Exception as e:
-            logging.warning(f"SSL SETUP: Cannot verify domain DNS: {e}")
-            # Tetap lanjutkan
         
         # Pastikan nginx berjalan
         subprocess.run(["systemctl", "start", "nginx"], check=False)
@@ -2210,7 +2238,7 @@ def recovery_status_api():
 
 # ==================== AKHIR API RECOVERY ====================
 
-# ==================== API DOMAIN MANAGEMENT ====================
+# ==================== API DOMAIN MANAGEMENT YANG DIPERBAIKI ====================
 
 @app.route('/api/domain/config', methods=['GET'])
 @login_required
@@ -2240,7 +2268,7 @@ def get_domain_config_api():
 @app.route('/api/domain/setup', methods=['POST'])
 def setup_domain_api():
     """
-    API untuk setup domain dengan error handling yang lebih baik
+    API untuk setup domain dengan error handling yang lebih baik dan user-friendly
     """
     try:
         data = request.json
@@ -2253,16 +2281,20 @@ def setup_domain_api():
         
         if not domain_name:
             return jsonify({
-                'status': 'error',
+                'success': False,
                 'message': 'Nama domain diperlukan'
             }), 400
         
         # Validasi domain name
         if not re.match(r'^[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', domain_name):
             return jsonify({
-                'status': 'error',
-                'message': 'Format domain tidak valid'
+                'success': False,
+                'message': 'Format domain tidak valid. Contoh: muhib.streamhib.com'
             }), 400
+        
+        # Cek DNS propagation dulu
+        dns_ok, dns_message = check_dns_propagation(domain_name)
+        logging.info(f"DOMAIN SETUP: DNS check result: {dns_message}")
         
         # Pastikan SSH tetap bisa diakses
         ensure_ssh_access()
@@ -2273,21 +2305,29 @@ def setup_domain_api():
         
         if not nginx_success:
             return jsonify({
-                'status': 'error',
+                'success': False,
                 'message': 'Gagal mengkonfigurasi Nginx. Periksa log server untuk detail.'
             }), 500
         
-        # Setup SSL jika diminta
+        # Tentukan apakah akan mencoba SSL
         ssl_success = True
         ssl_warning = False
+        ssl_message = ""
         
         if ssl_enabled:
-            logging.info(f"DOMAIN SETUP: Setting up SSL for {domain_name}")
-            ssl_success = setup_ssl_with_certbot(domain_name)
-            if not ssl_success:
-                logging.warning(f"SSL setup gagal untuk domain {domain_name}, melanjutkan tanpa SSL")
+            if dns_ok:
+                logging.info(f"DOMAIN SETUP: DNS OK, attempting SSL setup for {domain_name}")
+                ssl_success = setup_ssl_with_certbot(domain_name)
+                if not ssl_success:
+                    logging.warning(f"SSL setup gagal untuk domain {domain_name}")
+                    ssl_enabled = False
+                    ssl_warning = True
+                    ssl_message = "SSL gagal dikonfigurasi. Domain berhasil dikonfigurasi tanpa SSL."
+            else:
+                logging.warning(f"DOMAIN SETUP: DNS not ready, skipping SSL: {dns_message}")
                 ssl_enabled = False
                 ssl_warning = True
+                ssl_message = f"DNS belum mengarah dengan benar: {dns_message}. Domain dikonfigurasi tanpa SSL."
         
         # Simpan konfigurasi
         new_config = {
@@ -2295,7 +2335,9 @@ def setup_domain_api():
             'domain_name': domain_name,
             'ssl_enabled': ssl_enabled,
             'port': port,
-            'auto_redirect': auto_redirect
+            'auto_redirect': auto_redirect,
+            'nginx_configured': nginx_success,
+            'ssl_attempted': ssl_enabled or ssl_warning
         }
         
         write_domain_config(new_config)
@@ -2307,25 +2349,31 @@ def setup_domain_api():
                 'config': new_config
             })
         
-        success_message = f'Domain {domain_name} berhasil dikonfigurasi'
+        # Tentukan pesan sukses
         if ssl_warning:
-            success_message += ' (tanpa SSL - periksa DNS domain)'
+            success_message = f'Domain {domain_name} berhasil dikonfigurasi (tanpa SSL - periksa DNS domain)'
+        else:
+            success_message = f'Domain {domain_name} berhasil dikonfigurasi'
+            if ssl_enabled:
+                success_message += ' dengan SSL'
         
         return jsonify({
-            'status': 'success',
+            'success': True,
             'message': success_message,
             'data': {
                 'domain_name': domain_name,
                 'ssl_enabled': ssl_enabled,
                 'current_url': get_current_url(),
-                'ssl_warning': ssl_warning
+                'ssl_warning': ssl_warning,
+                'ssl_message': ssl_message,
+                'dns_status': dns_message
             }
         })
         
     except Exception as e:
         logging.error(f"DOMAIN SETUP: Error: {e}", exc_info=True)
         return jsonify({
-            'status': 'error',
+            'success': False,
             'message': f'Gagal setup domain: {str(e)}'
         }), 500
 
@@ -2349,7 +2397,9 @@ def remove_domain_api():
             'domain_name': '',
             'ssl_enabled': False,
             'port': 5000,
-            'auto_redirect': False
+            'auto_redirect': False,
+            'nginx_configured': False,
+            'ssl_attempted': False
         }
         
         write_domain_config(default_config)
@@ -2362,7 +2412,7 @@ def remove_domain_api():
             })
         
         return jsonify({
-            'status': 'success',
+            'success': True,
             'message': 'Konfigurasi domain berhasil dihapus',
             'data': {
                 'current_url': get_current_url()
@@ -2372,7 +2422,7 @@ def remove_domain_api():
     except Exception as e:
         logging.error(f"DOMAIN REMOVE: Error: {e}", exc_info=True)
         return jsonify({
-            'status': 'error',
+            'success': False,
             'message': f'Gagal menghapus domain: {str(e)}'
         }), 500
 
@@ -2388,8 +2438,17 @@ def setup_ssl_api():
         
         if not domain_name:
             return jsonify({
-                'status': 'error',
+                'success': False,
                 'message': 'Domain belum dikonfigurasi'
+            }), 400
+        
+        # Cek DNS dulu
+        dns_ok, dns_message = check_dns_propagation(domain_name)
+        
+        if not dns_ok:
+            return jsonify({
+                'success': False,
+                'message': f'DNS belum mengarah dengan benar: {dns_message}'
             }), 400
         
         # Setup SSL
@@ -2398,6 +2457,7 @@ def setup_ssl_api():
         if ssl_success:
             # Update konfigurasi
             current_config['ssl_enabled'] = True
+            current_config['ssl_attempted'] = True
             write_domain_config(current_config)
             
             # Setup ulang nginx dengan SSL
@@ -2411,7 +2471,7 @@ def setup_ssl_api():
                 })
             
             return jsonify({
-                'status': 'success',
+                'success': True,
                 'message': f'SSL berhasil dikonfigurasi untuk {domain_name}',
                 'data': {
                     'current_url': get_current_url()
@@ -2419,15 +2479,49 @@ def setup_ssl_api():
             })
         else:
             return jsonify({
-                'status': 'error',
-                'message': 'Gagal mengkonfigurasi SSL. Pastikan domain sudah mengarah ke server ini.'
+                'success': False,
+                'message': 'Gagal mengkonfigurasi SSL. Pastikan domain sudah mengarah ke server ini dan dapat diakses dari internet.'
             }), 500
         
     except Exception as e:
         logging.error(f"SSL SETUP: Error: {e}", exc_info=True)
         return jsonify({
-            'status': 'error',
+            'success': False,
             'message': f'Gagal setup SSL: {str(e)}'
+        }), 500
+
+@app.route('/api/domain/check-dns', methods=['POST'])
+@login_required
+def check_dns_api():
+    """
+    API untuk mengecek status DNS domain
+    """
+    try:
+        data = request.json
+        domain_name = data.get('domain_name', '').strip()
+        
+        if not domain_name:
+            return jsonify({
+                'success': False,
+                'message': 'Nama domain diperlukan'
+            }), 400
+        
+        dns_ok, dns_message = check_dns_propagation(domain_name)
+        
+        return jsonify({
+            'success': True,
+            'data': {
+                'dns_ok': dns_ok,
+                'message': dns_message,
+                'domain_name': domain_name
+            }
+        })
+        
+    except Exception as e:
+        logging.error(f"DNS CHECK: Error: {e}", exc_info=True)
+        return jsonify({
+            'success': False,
+            'message': f'Gagal mengecek DNS: {str(e)}'
         }), 500
 
 # ==================== AKHIR API DOMAIN ====================
@@ -2437,128 +2531,99 @@ def setup_ssl_api():
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        logging.debug(f"ADMIN CHECK: Checking admin access for route {request.endpoint}")
         if 'admin_user' not in session:
-            logging.warning(f"ADMIN ACCESS DENIED: No admin session found for route {request.endpoint}")
             return redirect(url_for('admin_login'))
-        logging.debug(f"ADMIN ACCESS GRANTED: User {session.get('admin_user')} accessing {request.endpoint}")
         return f(*args, **kwargs)
     return decorated_function
 
 @app.route('/admin/login', methods=['GET', 'POST'])
 def admin_login():
-    try:
-        if request.method == 'POST':
-            username = request.form.get('username')
-            password = request.form.get('password')
-            
-            logging.info(f"ADMIN LOGIN ATTEMPT: Username: {username}")
-            
-            # Default admin credentials
-            if username == 'admin' and password == 'streamhib2025':
-                session['admin_user'] = username
-                session.permanent = True
-                logging.info(f"ADMIN LOGIN SUCCESS: User {username} logged in successfully")
-                return redirect(url_for('admin_index'))
-            else:
-                logging.warning(f"ADMIN LOGIN FAILED: Invalid credentials for username: {username}")
-                return "Invalid admin credentials", 401
+    if request.method == 'POST':
+        username = request.form.get('username')
+        password = request.form.get('password')
         
-        return render_template('admin_login.html')
-    except Exception as e:
-        logging.error(f"ADMIN LOGIN ERROR: {e}", exc_info=True)
-        return "Internal Server Error", 500
+        # Default admin credentials
+        if username == 'admin' and password == 'streamhib2025':
+            session['admin_user'] = username
+            session.permanent = True
+            return redirect(url_for('admin_index'))
+        else:
+            return "Invalid admin credentials", 401
+    
+    return render_template('admin_login.html')
 
 @app.route('/admin/logout')
 def admin_logout():
-    try:
-        admin_user = session.get('admin_user', 'unknown')
-        session.pop('admin_user', None)
-        logging.info(f"ADMIN LOGOUT: User {admin_user} logged out")
-        return redirect(url_for('admin_login'))
-    except Exception as e:
-        logging.error(f"ADMIN LOGOUT ERROR: {e}", exc_info=True)
-        return redirect(url_for('admin_login'))
+    session.pop('admin_user', None)
+    return redirect(url_for('admin_login'))
 
 @app.route('/admin')
 @admin_required
 def admin_index():
     try:
-        logging.info(f"ADMIN INDEX: Loading admin dashboard for user {session.get('admin_user')}")
-        
-        # Get statistics with safe error handling
+        # Get statistics
         users = read_users()
         s_data = read_sessions()
         videos = get_videos_list_data()
         domain_config = read_domain_config()
         
-        # Ensure all data is properly formatted
-        active_sessions = s_data.get('active_sessions', [])
-        inactive_sessions = s_data.get('inactive_sessions', [])
-        scheduled_sessions = s_data.get('scheduled_sessions', [])
+        stats = {
+            'total_users': len(users),
+            'active_sessions': len(s_data.get('active_sessions', [])),
+            'inactive_sessions': len(s_data.get('inactive_sessions', [])),
+            'scheduled_sessions': len(s_data.get('scheduled_sessions', [])),
+            'total_videos': len(videos)
+        }
         
-        # Convert to dict if it's a list (fix for the template error)
+        # Convert active_sessions list to dict for template compatibility
+        active_sessions = s_data.get('active_sessions', [])
         if isinstance(active_sessions, list):
             active_sessions_dict = {f"session_{i}": session for i, session in enumerate(active_sessions)}
         else:
             active_sessions_dict = active_sessions
         
-        stats = {
-            'total_users': len(users) if users else 0,
-            'active_sessions': len(active_sessions) if active_sessions else 0,
-            'inactive_sessions': len(inactive_sessions) if inactive_sessions else 0,
-            'scheduled_sessions': len(scheduled_sessions) if scheduled_sessions else 0,
-            'total_videos': len(videos) if videos else 0
-        }
-        
-        # Prepare sessions data for template
         sessions_data = {
             'active_sessions': active_sessions_dict,
-            'inactive_sessions': inactive_sessions,
-            'scheduled_sessions': scheduled_sessions
+            'inactive_sessions': s_data.get('inactive_sessions', []),
+            'scheduled_sessions': s_data.get('scheduled_sessions', [])
         }
-        
-        logging.info(f"ADMIN INDEX: Stats loaded - {stats}")
         
         return render_template('admin_index.html', 
                              stats=stats, 
                              sessions=sessions_data,
                              domain_config=domain_config)
     except Exception as e:
-        logging.error(f"ADMIN INDEX ERROR: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
+        logging.error(f"Error rendering admin index: {e}", exc_info=True)
+        return "Internal Server Error", 500
 
 @app.route('/admin/users')
 @admin_required
 def admin_users():
     try:
-        logging.info(f"ADMIN USERS: Loading users page for admin {session.get('admin_user')}")
         users = read_users()
         return render_template('admin_users.html', users=users)
     except Exception as e:
-        logging.error(f"ADMIN USERS ERROR: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
+        logging.error(f"Error rendering admin users: {e}", exc_info=True)
+        return "Internal Server Error", 500
 
 @app.route('/admin/domain')
 @admin_required
 def admin_domain():
     try:
-        logging.info(f"ADMIN DOMAIN: Loading domain page for admin {session.get('admin_user')}")
         domain_config = read_domain_config()
         return render_template('admin_domain.html', domain_config=domain_config)
     except Exception as e:
-        logging.error(f"ADMIN DOMAIN ERROR: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
+        logging.error(f"Error rendering admin domain: {e}", exc_info=True)
+        return "Internal Server Error", 500
 
 @app.route('/admin/recovery')
 @admin_required
 def admin_recovery():
     try:
-        logging.info(f"ADMIN RECOVERY: Loading recovery page for admin {session.get('admin_user')}")
         return render_template('admin_recovery.html')
     except Exception as e:
-        logging.error(f"ADMIN RECOVERY ERROR: {e}", exc_info=True)
-        return f"Internal Server Error: {str(e)}", 500
+        logging.error(f"Error rendering admin recovery: {e}", exc_info=True)
+        return "Internal Server Error", 500
 
 # ==================== ADMIN API ROUTES ====================
 
@@ -2569,27 +2634,21 @@ def admin_login_api():
         username = data.get('username')
         password = data.get('password')
         
-        logging.info(f"ADMIN API LOGIN: Attempt for username {username}")
-        
         if username == 'admin' and password == 'streamhib2025':
             session['admin_user'] = username
             session.permanent = True
-            logging.info(f"ADMIN API LOGIN SUCCESS: User {username}")
             return jsonify({'success': True, 'message': 'Login successful'})
         else:
-            logging.warning(f"ADMIN API LOGIN FAILED: Invalid credentials for {username}")
             return jsonify({'success': False, 'message': 'Invalid credentials'}), 401
             
     except Exception as e:
-        logging.error(f"ADMIN API LOGIN ERROR: {e}", exc_info=True)
+        logging.error(f"Admin login error: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'Server error'}), 500
 
 @app.route('/api/admin/users/<username>', methods=['DELETE'])
 @admin_required
 def delete_user_api(username):
     try:
-        logging.info(f"ADMIN DELETE USER: Deleting user {username} by admin {session.get('admin_user')}")
-        
         users = read_users()
         
         if username not in users:
@@ -2598,19 +2657,16 @@ def delete_user_api(username):
         del users[username]
         write_users(users)
         
-        logging.info(f"ADMIN DELETE USER SUCCESS: User {username} deleted")
         return jsonify({'success': True, 'message': f'User {username} deleted successfully'})
         
     except Exception as e:
-        logging.error(f"ADMIN DELETE USER ERROR: {e}", exc_info=True)
+        logging.error(f"Error deleting user {username}: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'Server error'}), 500
 
 @app.route('/api/sessions/stop/<session_id>', methods=['POST'])
 @admin_required
 def stop_session_admin_api(session_id):
     try:
-        logging.info(f"ADMIN STOP SESSION: Stopping session {session_id} by admin {session.get('admin_user')}")
-        
         # Reuse existing stop streaming logic
         s_data = read_sessions()
         active_session_data = next((s for s in s_data.get('active_sessions',[]) if s['id']==session_id),None)
@@ -2647,11 +2703,10 @@ def stop_session_admin_api(session_id):
             socketio.emit('sessions_update',get_active_sessions_data())
             socketio.emit('inactive_sessions_update',{"inactive_sessions":get_inactive_sessions_data()})
         
-        logging.info(f"ADMIN STOP SESSION SUCCESS: Session {session_id} stopped")
         return jsonify({'success': True, 'message': f'Session {session_id} stopped successfully'})
         
     except Exception as e:
-        logging.error(f"ADMIN STOP SESSION ERROR: {e}", exc_info=True)
+        logging.error(f"Error stopping session {session_id}: {e}", exc_info=True)
         return jsonify({'success': False, 'message': 'Server error'}), 500
 
 # ==================== AKHIR ADMIN PANEL ====================
