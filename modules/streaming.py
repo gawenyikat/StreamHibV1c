@@ -78,10 +78,10 @@ def init_streaming(app, socketio, scheduler):
         try:
             data = request.get_json()
             if not data: 
-                return jsonify({'status': 'error', 'message': 'Request JSON tidak valid.'}), 400
+                return jsonify({'status':'error','message':'Request JSON tidak valid.'}),400
             session_id_to_stop = data.get('session_id')
             if not session_id_to_stop: 
-                return jsonify({'status': 'error', 'message': 'ID sesi (nama sesi asli) diperlukan'}), 400
+                return jsonify({'status':'error','message':'ID sesi (nama sesi asli) diperlukan'}),400
             
             if stop_streaming_session(session_id_to_stop):
                 from . import get_socketio

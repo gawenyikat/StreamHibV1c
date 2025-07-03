@@ -456,3 +456,107 @@ def get_schedules_list_data():
         return sorted(schedule_list, key=lambda x: (x['recurrence_type'] == 'daily', x.get('start_time_iso', x['session_name_original'])))
     except TypeError:
         return sorted(schedule_list, key=lambda x: x['session_name_original'])
+
+def recover_schedules():
+    """Recover scheduled sessions on startup"""
+    try:
+        s_data = load_sessions()
+        now_jkt = datetime.now(jakarta_tz)
+        valid_schedules_in_json = []
+
+        logger.info("SCHEDULER RECOVERY: Memulai pemulihan jadwal...")
+        for sched_def in s_data.get('scheduled_sessions', []):
+            try:
+                session_name_original = sched_def.get('session_name_original')
+                schedule_definition_id = sched_def.get('id') 
+                sanitized_service_id = sched_def.get('sanitized_service_id') 
+
+                platform = sched_def.get('platform')
+                stream_key = sched_def.get('stream_key')
+                video_file = sched_def.get('video_file')
+                recurrence = sched_def.get('recurrence_type', 'one_time')
+
+                if not all([session_name_original, sanitized_service_id, platform, stream_key, video_file, schedule_definition_id]):
+                    logger.warning(f"SCHEDULER RECOVERY: Skip jadwal '{session_name_original}' karena field dasar kurang.")
+                    continue
+
+                # Verify video file exists
+                video_path = os.path.join(VIDEOS_DIR, video_file)
+                if not os.path.exists(video_path):
+                    logger.warning(f"SCHEDULER RECOVERY: Video file '{video_file}' tidak ditemukan untuk jadwal '{session_name_original}'. Skip.")
+                    continue
+
+                if recurrence == 'daily':
+                    start_time_str = sched_def.get('start_time_of_day')
+                    stop_time_str = sched_def.get('stop_time_of_day')
+                    if not start_time_str or not stop_time_str:
+                        logger.warning(f"SCHEDULER RECOVERY: Skip jadwal harian '{session_name_original}' karena field waktu harian kurang.")
+                        continue
+                    
+                    start_h, start_m = map(int, start_time_str.split(':'))
+                    stop_h, stop_m = map(int, stop_time_str.split(':'))
+
+                    aps_start_job_id = f"daily-start-{sanitized_service_id}" 
+                    aps_stop_job_id = f"daily-stop-{sanitized_service_id}"   
+
+                    from . import get_scheduler
+                    scheduler_inst = get_scheduler()
+                    if scheduler_inst:
+                        scheduler_inst.add_job(start_scheduled_streaming, 'cron', hour=start_h, minute=start_m,
+                                              args=[platform, stream_key, video_file, session_name_original, 0, 'daily', start_time_str, stop_time_str],
+                                              id=aps_start_job_id, replace_existing=True, misfire_grace_time=3600)
+                        logger.info(f"SCHEDULER RECOVERY: Recovered daily start job '{aps_start_job_id}' for '{session_name_original}' at {start_time_str}")
+
+                        scheduler_inst.add_job(stop_scheduled_streaming, 'cron', hour=stop_h, minute=stop_m,
+                                              args=[session_name_original],
+                                              id=aps_stop_job_id, replace_existing=True, misfire_grace_time=3600)
+                        logger.info(f"SCHEDULER RECOVERY: Recovered daily stop job '{aps_stop_job_id}' for '{session_name_original}' at {stop_time_str}")
+                        valid_schedules_in_json.append(sched_def)
+
+                elif recurrence == 'one_time':
+                    start_time_iso = sched_def.get('start_time_iso')
+                    duration_minutes = sched_def.get('duration_minutes')
+                    is_manual = sched_def.get('is_manual_stop', duration_minutes == 0)
+                    aps_start_job_id = schedule_definition_id 
+
+                    if not start_time_iso or duration_minutes is None:
+                        logger.warning(f"SCHEDULER RECOVERY: Skip jadwal one-time '{session_name_original}' karena field waktu/durasi kurang.")
+                        continue
+
+                    start_dt = datetime.fromisoformat(start_time_iso).astimezone(now_jkt.tzinfo)
+
+                    if start_dt > now_jkt:
+                        from . import get_scheduler
+                        scheduler_inst = get_scheduler()
+                        if scheduler_inst:
+                            scheduler_inst.add_job(start_scheduled_streaming, 'date', run_date=start_dt,
+                                                  args=[platform, stream_key, video_file, session_name_original, duration_minutes, 'one_time', None, None],
+                                                  id=aps_start_job_id, replace_existing=True)
+                            logger.info(f"SCHEDULER RECOVERY: Recovered one-time start job '{aps_start_job_id}' for '{session_name_original}' at {start_dt}")
+
+                            if not is_manual:
+                                stop_dt = start_dt + timedelta(minutes=duration_minutes)
+                                if stop_dt > now_jkt:
+                                    aps_stop_job_id = f"onetime-stop-{sanitized_service_id}" 
+                                    scheduler_inst.add_job(stop_scheduled_streaming, 'date', run_date=stop_dt,
+                                                          args=[session_name_original],
+                                                          id=aps_stop_job_id, replace_existing=True)
+                                    logger.info(f"SCHEDULER RECOVERY: Recovered one-time stop job '{aps_stop_job_id}' for '{session_name_original}' at {stop_dt}")
+                            valid_schedules_in_json.append(sched_def)
+                    else:
+                        logger.info(f"SCHEDULER RECOVERY: Skip jadwal one-time '{session_name_original}' karena waktu sudah lewat.")
+                else:
+                     logger.warning(f"SCHEDULER RECOVERY: Tipe recurrence '{recurrence}' tidak dikenal untuk '{session_name_original}'.")
+
+            except Exception as e:
+                logger.error(f"SCHEDULER RECOVERY: Gagal memulihkan jadwal '{sched_def.get('session_name_original', 'UNKNOWN')}': {e}", exc_info=True)
+        
+        if len(s_data.get('scheduled_sessions', [])) != len(valid_schedules_in_json):
+            s_data['scheduled_sessions'] = valid_schedules_in_json
+            save_sessions(s_data)
+            logger.info("SCHEDULER RECOVERY: File sessions.json diupdate dengan jadwal yang valid setelah pemulihan.")
+        
+        logger.info(f"SCHEDULER RECOVERY: Pemulihan jadwal selesai. Total jadwal valid: {len(valid_schedules_in_json)}")
+        
+    except Exception as e:
+        logger.error(f"SCHEDULER RECOVERY: Error recovering schedules: {e}", exc_info=True)
